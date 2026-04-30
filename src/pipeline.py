@@ -8,10 +8,11 @@ import logging
 from typing import List, Optional, Dict
 from pathlib import Path
 
-from loader import load_documents, chunk_documents
-from embedder import get_embedder
-from retriever import create_vectorstore, get_retriever
-from generator import get_llm, create_rag_prompt, create_qa_chain, generate_response
+from .loader import load_documents, chunk_documents
+from .embedder import get_embedder
+from .retriever import create_vectorstore, get_retriever
+from .generator import get_llm, create_rag_prompt, create_qa_chain, generate_response
+from langchain_community.vectorstores import Chroma
 
 
 logging.basicConfig(level=logging.INFO)
@@ -34,8 +35,8 @@ class RAGPipeline:
         data_dir: str = "data/",
         embedder_provider: str = "huggingface",
         embedder_model: str = "sentence-transformers/all-MiniLM-L6-v2",
-        llm_provider: str = "ollama",
-        llm_model: str = "phi3",
+        llm_provider: str = "openai",
+        llm_model: str = "gpt-4o",
         chunk_size: int = 500,
         chunk_overlap: int = 50,
         retrieval_k: int = 4,
@@ -77,8 +78,10 @@ class RAGPipeline:
         persist_path = Path(self.persist_dir) if self.persist_dir else None
         if persist_path and persist_path.exists() and not force_rebuild:
             logger.info("Loading existing vectorstore...")
-            # TODO: Load from persist_dir
-            # self.vectorstore = Chroma(persist_directory=self.persist_dir, ...)
+            self.vectorstore = Chroma(
+                persist_directory=self.persist_dir,
+                embedding_function=self.embedder
+            )
         else:
             logger.info("Loading and chunking documents...")
             documents = load_documents(self.data_dir)
@@ -100,6 +103,7 @@ class RAGPipeline:
         logger.info("Setting up retriever...")
         self.retriever = get_retriever(
             self.vectorstore,
+            search_type="mmr",
             k=self.retrieval_k
         )
 

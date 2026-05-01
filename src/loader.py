@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 from langchain_community.document_loaders import (
     TextLoader,
-    PyPDFLoader,      # ← UNCOMMENTED
+    PyPDFLoader,
     WebBaseLoader,
     DirectoryLoader
 )
@@ -16,6 +16,7 @@ from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
     TokenTextSplitter
 )
+
 
 def load_documents(data_dir: str = "data/") -> List:
     """
@@ -28,15 +29,16 @@ def load_documents(data_dir: str = "data/") -> List:
     for file_path in path.glob("*.txt"):
         loader = TextLoader(str(file_path), encoding="utf-8")
         documents.extend(loader.load())
+        print(f"Loaded TXT: {file_path.name}")
 
-    # Load PDF files (UNCOMMENTED AND ADDED)
+    # Load PDF files
     for pdf_path in path.glob("*.pdf"):
         try:
             loader = PyPDFLoader(str(pdf_path))
             documents.extend(loader.load())
-            print(f"✓ Loaded PDF: {pdf_path.name}")
+            print(f"Loaded PDF: {pdf_path.name}")
         except Exception as e:
-            print(f"✗ Error loading {pdf_path.name}: {e}")
+            print(f"Error loading {pdf_path.name}: {e}")
 
     return documents
 
@@ -73,10 +75,15 @@ def chunk_documents(
 
     chunks = splitter.split_documents(documents)
 
+    # Add chunk metadata
+    for i, chunk in enumerate(chunks):
+        chunk.metadata["chunk_id"] = i
+        chunk.metadata["chunk_size"] = len(chunk.page_content)
+
     return chunks
 
 
 if __name__ == "__main__":
     docs = load_documents()
     chunks = chunk_documents(docs)
-    print(f"Loaded {len(docs)} documents, created {len(chunks)} chunks")
+    print(f"\nLoaded {len(docs)} documents, created {len(chunks)} chunks")

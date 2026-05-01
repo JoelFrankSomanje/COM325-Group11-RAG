@@ -11,7 +11,7 @@ from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import LLMChainExtractor
 from langchain.retrievers.self_query.base import SelfQueryRetriever
 from langchain.chains.query_constructor.base import AttributeInfo
-from langchain.retrievers import BM25Retriever
+from langchain_community.retrievers import BM25Retriever
 from langchain.chat_models import ChatOpenAI
 
 def create_vectorstore(
@@ -90,7 +90,7 @@ def retrieve_with_hybrid_search(
 ) -> List[Document]:
    
    #the vector retriver
-   vector_retriever = vectorstore.as_retreiver(search_kwargs={"k": k})
+   vector_retriever = vectorstore.as_retriever(search_kwargs={"k": k})
    vectore_docs = vector_retriever.invoke(query)
 
 

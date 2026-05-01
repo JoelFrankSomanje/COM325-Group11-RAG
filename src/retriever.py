@@ -12,7 +12,7 @@ from langchain.retrievers.document_compressors import LLMChainExtractor
 from langchain.retrievers.self_query.base import SelfQueryRetriever
 from langchain.chains.query_constructor.base import AttributeInfo
 from langchain_community.retrievers import BM25Retriever
-from langchain.chat_models import ChatOpenAI
+from langchain.openai import ChatOpenAI
 
 def create_vectorstore(
     documents: List[Document],

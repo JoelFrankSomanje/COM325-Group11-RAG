@@ -1,57 +1,60 @@
+"""
+Ollama Embedding Model
+======================
+Local embedding helpers for the RAG pipeline.
+"""
+
 from typing import List
-from langchain_community.embeddings import (
-    HuggingFaceEmbeddings,
-    OllamaEmbeddings
-)
-from langchain_openai import OpenAIEmbeddings
+
+try:
+    from langchain_ollama import OllamaEmbeddings
+except ImportError:
+    from langchain_community.embeddings import OllamaEmbeddings
 
 
-def get_embedder(
-    provider: str = "huggingface",
-    model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
-):
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+
+
+def get_embedder(model_name: str = DEFAULT_EMBEDDING_MODEL, **kwargs) -> OllamaEmbeddings:
     """
-    Get embedding model with flexibility.
+    Create an Ollama embedding model.
 
-    Supports:
-    - huggingface (default)
-    - ollama (local)
-    - openai (API-based)
+    Use an embedding-focused Ollama model such as:
+    - nomic-embed-text
+    - mxbai-embed-large
+
+    Pull one first with, for example:
+        ollama pull nomic-embed-text
     """
-
-    if provider == "huggingface":
-        return HuggingFaceEmbeddings(
-            model_name=model_name,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True}
-        )
-
-    elif provider == "ollama":
-        return OllamaEmbeddings(model=model_name)
-
-    elif provider == "openai":
-        return OpenAIEmbeddings(model=model_name)
-
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
+    return OllamaEmbeddings(model=model_name, **kwargs)
 
 
-def embed_documents(embedder, documents: List, batch_size: int = 32):
+def embed_documents(embedder, documents: List, batch_size: int = 32) -> List[List[float]]:
     """
-    Embed documents with batching for efficiency.
-    """
-    texts = [doc.page_content for doc in documents]
-    embeddings = []
+    Embed document page content in batches.
 
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
+    Batching keeps large document sets friendlier to a local Ollama server.
+    """
+    texts = [doc.page_content for doc in documents if doc.page_content.strip()]
+    embeddings: List[List[float]] = []
+
+    for start in range(0, len(texts), batch_size):
+        batch = texts[start:start + batch_size]
         embeddings.extend(embedder.embed_documents(batch))
 
     return embeddings
 
 
-def embed_query(embedder, query: str):
-    """
-    Embed a single query.
-    """
+def embed_query(embedder, query: str) -> List[float]:
+    """Embed a single query string with Ollama."""
+    if not query.strip():
+        raise ValueError("Query cannot be empty.")
+
     return embedder.embed_query(query)
+
+
+if __name__ == "__main__":
+    embedder = get_embedder()
+    test_text = "What is Retrieval-Augmented Generation?"
+    embedding = embed_query(embedder, test_text)
+    print(f"Embedding dimension: {len(embedding)}")

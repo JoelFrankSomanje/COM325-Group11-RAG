@@ -1,20 +1,20 @@
-# RAG Starter Template
+# Ollama RAG Starter
 
-A scaffolded RAG (Retrieval-Augmented Generation) implementation for students.
+A local Retrieval-Augmented Generation (RAG) starter project powered by Ollama, LangChain, and Chroma.
 
 ## Project Structure
 
-```
+```text
 rag-starter/
 ├── data/                 # Place your documents here
 ├── notebooks/            # For experimentation
 ├── src/
-│   ├── loader.py        # Document loading & chunking
-│   ├── embedder.py      # Text embedding
-│   ├── retriever.py     # Similarity search
-│   ├── generator.py     # LLM generation
-│   └── pipeline.py      # Main orchestration
-├── main.py              # CLI interface
+│   ├── loader.py         # Document loading and chunking
+│   ├── embedder.py       # Ollama embeddings
+│   ├── retriever.py      # Chroma retrieval and local reranking
+│   ├── generator.py      # Ollama generation and RAG prompt
+│   └── pipeline.py       # Main orchestration
+├── main.py               # CLI interface
 ├── requirements.txt
 └── README.md
 ```
@@ -27,74 +27,86 @@ rag-starter/
 pip install -r requirements.txt
 ```
 
-### 2. Set Up Local LLM (Recommended)
-
-Install Ollama for local LLM inference:
+### 2. Install and Start Ollama
 
 ```bash
 # macOS/Linux
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Windows
-# Download from https://ollama.com/download/windows
+# Start Ollama if it is not already running
+ollama serve
 ```
 
-Pull a model:
+For Windows, download Ollama from https://ollama.com/download/windows.
+
+### 3. Pull Local Models
+
+You need one embedding model and one chat/generation model:
+
 ```bash
+ollama pull nomic-embed-text
 ollama pull phi3
-# or
-ollama pull llama3
 ```
 
-### 3. Add Your Documents
+Optional alternatives:
 
-Place your documents in the `data/` directory:
-- Text files: `.txt`
-- PDFs: `.pdf` (requires pypdf - figure it out)
-- And extend `loader.py` as needed
+```bash
+ollama pull mxbai-embed-large
+ollama pull llama3
+ollama pull mistral
+```
 
-### 4. Run the Pipeline
+### 4. Add Your Documents
+
+Place documents in the `data/` directory.
+
+Supported file types:
+- `.txt`
+- `.md`
+- `.pdf`
+
+### 5. Run the Pipeline
 
 ```bash
 # Interactive mode
-python main.py --mode interactive
+python3 main.py --mode interactive
 
 # Demo mode
-python main.py --mode demo
+python3 main.py --mode demo
 ```
 
-## Required Modifications
-
-**This is a scaffold - you MUST modify the following:**
-
-| File | What to Modify |
-|------|----------------|
-| `src/loader.py` | Chunking strategy, file types |
-| `src/embedder.py` | Embedding model selection |
-| `src/retriever.py` | Retrieval parameters, hybrid search |
-| `src/generator.py` | Prompt template, LLM choice |
-| `src/pipeline.py` | Pipeline configuration, evaluation |
-
-## Key Commands
+## Useful Commands
 
 ```bash
-# Run with custom settings
-python main.py --llm-model llama3 --k 5 --chunk-size 300
+# Use a stronger LLM and retrieve more chunks
+python3 main.py --llm-model llama3 --k 5 --chunk-size 300
 
-# Run tests
-python -m pytest
+# Use a different Ollama embedding model
+python3 main.py --embedder-model mxbai-embed-large --force-rebuild
+
+# Rebuild the Chroma index after changing documents or embedding model
+python3 main.py --force-rebuild
 ```
+
+## What Is Implemented
+
+| File | Implementation |
+|------|----------------|
+| `src/loader.py` | Loads `.txt`, `.md`, and `.pdf` files, then adds chunk metadata |
+| `src/embedder.py` | Uses Ollama embeddings only, with batched document embedding |
+| `src/retriever.py` | Uses Chroma, supports similarity search, hybrid search, and local reranking |
+| `src/generator.py` | Uses Ollama generation only and returns source documents |
+| `src/pipeline.py` | Orchestrates indexing, retrieval, querying, confidence scoring, and basic evaluation |
 
 ## Troubleshooting
 
-- **No documents loaded**: Check `data/` directory contains valid files
-- **LLM not responding**: Ensure Ollama is running (`ollama serve`)
-- **Embedding errors**: Verify `sentence-transformers` installed correctly
+- **No documents loaded**: Check that `data/` contains `.txt`, `.md`, or `.pdf` files.
+- **Ollama connection errors**: Ensure Ollama is running with `ollama serve`.
+- **Missing model errors**: Pull the model first, for example `ollama pull phi3` and `ollama pull nomic-embed-text`.
+- **Old answers after changing documents**: Run with `--force-rebuild` to recreate the vector index.
 
 ## Resources
 
-- LangChain RAG: https://github.com/langchain-ai/rag-from-scratch
-- LlamaIndex: https://github.com/run-llama/llama_index
 - Ollama: https://ollama.com
-
----
+- LangChain RAG: https://github.com/langchain-ai/rag-from-scratch
+- Chroma: https://www.trychroma.com/

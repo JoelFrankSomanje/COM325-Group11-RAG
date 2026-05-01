@@ -1,11 +1,13 @@
 """
 RAG Assistant - CLI Interface
 ==============================
-Interactive CLI for the RAG pipeline.
+Interactive CLI for the Ollama-powered RAG pipeline.
 """
 
 import argparse
-import sys
+
+from src.embedder import DEFAULT_EMBEDDING_MODEL
+from src.generator import DEFAULT_LLM_MODEL
 from src.pipeline import RAGPipeline
 
 
@@ -30,20 +32,23 @@ def interactive_mode(pipeline: RAGPipeline):
             response = pipeline.query(query, return_sources=True)
 
             print(f"\nAssistant: {response['answer']}")
+            print(f"Confidence: {response.get('confidence', 0):.2f}")
 
-            if "sources" in response and response["sources"]:
+            if response.get("sources"):
                 print("\nSources:")
-                for i, source in enumerate(response["sources"], 1):
-                    print(f"  {i}. {source.get('metadata', {}).get('source', 'Unknown')}")
-                    print(f"     {source['content'][:100]}...")
+                for index, source in enumerate(response["sources"], 1):
+                    metadata = source.get("metadata", {})
+                    source_name = metadata.get("file_name") or metadata.get("source", "Unknown")
+                    print(f"  {index}. {source_name}")
+                    print(f"     {source['content'][:120]}...")
 
             print()
 
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
-        except Exception as e:
-            print(f"Error: {e}\n")
+        except Exception as error:
+            print(f"Error: {error}\n")
 
 
 def demo_mode(pipeline: RAGPipeline):
@@ -51,7 +56,7 @@ def demo_mode(pipeline: RAGPipeline):
     demo_questions = [
         "What is the main topic of the documents?",
         "Summarize the key points.",
-        "What are the main conclusions?"
+        "What are the main conclusions?",
     ]
 
     print("=" * 50)
@@ -65,67 +70,84 @@ def demo_mode(pipeline: RAGPipeline):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="RAG Assistant CLI")
+    parser = argparse.ArgumentParser(description="Ollama RAG Assistant CLI")
     parser.add_argument(
         "--mode",
         choices=["interactive", "demo"],
         default="interactive",
-        help="Mode to run the assistant"
+        help="Mode to run the assistant",
     )
     parser.add_argument(
         "--data-dir",
         default="data/",
-        help="Directory containing documents"
+        help="Directory containing .txt, .md, or .pdf documents",
     )
     parser.add_argument(
-        "--embedder",
-        default="huggingface",
-        choices=["huggingface", "openai", "ollama"],
-        help="Embedder provider"
-    )
-    parser.add_argument(
-        "--llm",
-        default="ollama",
-        choices=["ollama", "huggingface", "openai"],
-        help="LLM provider"
+        "--embedder-model",
+        default=DEFAULT_EMBEDDING_MODEL,
+        help="Ollama embedding model name",
     )
     parser.add_argument(
         "--llm-model",
-        default="phi3",
-        help="LLM model name"
+        default=DEFAULT_LLM_MODEL,
+        help="Ollama LLM model name",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.2,
+        help="LLM temperature; lower is more grounded",
     )
     parser.add_argument(
         "--k",
         type=int,
         default=4,
-        help="Number of documents to retrieve"
+        help="Number of documents to retrieve",
     )
     parser.add_argument(
         "--chunk-size",
         type=int,
         default=500,
-        help="Chunk size for text splitting"
+        help="Chunk size for text splitting",
+    )
+    parser.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=50,
+        help="Chunk overlap for text splitting",
+    )
+    parser.add_argument(
+        "--persist-dir",
+        default="vectorstore",
+        help="Directory for the Chroma vectorstore",
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Rebuild the vectorstore instead of reusing it",
     )
 
     args = parser.parse_args()
 
-    print("Initializing RAG Pipeline...")
+    print("Initializing Ollama RAG Pipeline...")
     print(f"  Data directory: {args.data_dir}")
-    print(f"  Embedder: {args.embedder}")
-    print(f"  LLM: {args.llm} ({args.llm_model})")
+    print(f"  Embedder model: {args.embedder_model}")
+    print(f"  LLM model: {args.llm_model}")
     print(f"  Retrieval K: {args.k}")
     print(f"  Chunk size: {args.chunk_size}")
 
     pipeline = RAGPipeline(
         data_dir=args.data_dir,
-        embedder_provider=args.embedder,
-        llm_provider=args.llm,
+        embedder_model=args.embedder_model,
         llm_model=args.llm_model,
+        temperature=args.temperature,
         retrieval_k=args.k,
-        chunk_size=args.chunk_size
+        chunk_size=args.chunk_size,
+        chunk_overlap=args.chunk_overlap,
+        persist_dir=args.persist_dir,
     )
 
-    pipeline.load_and_index()
+    pipeline.load_and_index(force_rebuild=args.force_rebuild)
 
     if args.mode == "interactive":
         interactive_mode(pipeline)

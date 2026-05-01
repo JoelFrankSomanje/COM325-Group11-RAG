@@ -1,137 +1,156 @@
 """
-LLM GENERATOR MODULE
-Scenario: University Academic Policy Q&A
-
-Modifications & Justifications:
-1. Custom prompt template tailored for academic regulation answers
-   - Instructs LLM to cite sections (e.g., Section 3.4)
-   - Tells LLM to say not found if context is insufficient
-   - Prevents hallucination of fake university policies
-
-2. Temperature set to 0.1 (from 0.7):
-   - Lower temperature = more factual, deterministic answers
-   - Critical for policy Q&A where accuracy matters more than creativity
-
-3. chain_type set to stuff:
-   - Appropriate for our chunk sizes
-   - Faster than map_reduce for small document sets
-
-4. return_source_documents=True:
-   - Shows students which document the answer came from
+Ollama LLM Generator Module
+===========================
+Prompt and generation helpers for local Ollama RAG.
 """
 
-from typing import List, Optional, Dict
-from langchain_community.llms import Ollama
-from langchain_openai import ChatOpenAI
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+from dataclasses import dataclass
+from typing import Dict, Optional
+
+try:
+    from langchain_ollama import OllamaLLM as Ollama
+except ImportError:
+    from langchain_community.llms import Ollama
+
+
+DEFAULT_LLM_MODEL = "phi3"
+
+
+@dataclass
+class RAGPrompt:
+    """Small prompt formatter that avoids version-specific LangChain prompt APIs."""
+
+    template: str
+    system_message: str
+
+    def format(self, context: str, question: str) -> str:
+        return self.template.format(
+            system_message=self.system_message,
+            context=context,
+            question=question,
+        )
+
+
+@dataclass
+class SimpleRAGChain:
+    """Minimal retrieval + generation chain compatible with LangChain retrievers."""
+
+    llm: Ollama
+    retriever: object
+    prompt: RAGPrompt
+
+    def invoke(self, inputs: Dict[str, str]) -> Dict:
+        query = inputs.get("query") or inputs.get("question") or ""
+        source_documents = self.retriever.invoke(query)
+        context = _format_documents(source_documents)
+        prompt_text = self.prompt.format(context=context, question=query)
+        answer = self.llm.invoke(prompt_text)
+
+        return {
+            "result": str(answer).strip(),
+            "source_documents": source_documents,
+        }
 
 
 def get_llm(
-    provider: str = "ollama",
-    model_name: str = "phi3",
-    temperature: float = 0.1,
-    **kwargs
-):
+    model_name: str = DEFAULT_LLM_MODEL,
+    temperature: float = 0.2,
+    **kwargs,
+) -> Ollama:
     """
-    Get an LLM for generation.
+    Create an Ollama LLM for generation.
 
-    Justification for temperature=0.1:
-    Academic policy answers must be precise and consistent.
-    High temperature risks the model inventing rules that do not exist.
+    Lower temperatures are better for grounded RAG answers. Good local models:
+    - phi3: small and fast
+    - llama3: stronger answers if your machine can run it
+    - mistral: balanced speed and quality
     """
-    if provider == "ollama":
-        return Ollama(model=model_name, temperature=temperature)
-    elif provider == "openai":
-        return ChatOpenAI(model=model_name, temperature=temperature, **kwargs)
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
+    return Ollama(model=model_name, temperature=temperature, **kwargs)
 
 
 def create_rag_prompt(
     system_message: Optional[str] = None,
-    template: Optional[str] = None
-) -> PromptTemplate:
+    template: Optional[str] = None,
+) -> RAGPrompt:
     """
-    Custom prompt for University Academic Policy Q&A.
+    Create a RAG prompt template with citation-friendly instructions.
+    """
+    if system_message is None:
+        system_message = (
+            "You are a careful RAG assistant. Answer only from the provided context. "
+            "If the context does not contain the answer, say you do not know. "
+            "Use concise language and mention the source names when they are available."
+        )
 
-    Justification:
-    - Default scaffold prompt is too generic
-    - University assistant must cite specific sections
-    - Must refuse to guess when information is not available
-    """
     if template is None:
-        template = """You are an academic advisor assistant for the University of Malawi.
-Use ONLY the context below to answer the student's question.
-Always cite the relevant section (e.g., According to Section 3.4...).
-If the answer is not found in the context, respond with:
-I could not find this information in the university regulations.
-Please contact the Registrars Office.
-Do NOT make up rules or policies.
+        template = """{system_message}
 
 Context:
 {context}
 
-Student Question: {question}
+Question: {question}
 
 Answer:"""
 
-    return PromptTemplate(
-        template=template,
-        input_variables=["context", "question"]
-    )
+    return RAGPrompt(template=template, system_message=system_message)
 
 
-def create_qa_chain(llm, retriever, prompt: Optional[PromptTemplate] = None):
+def create_qa_chain(llm, retriever, prompt: Optional[RAGPrompt] = None) -> SimpleRAGChain:
     """
-    Create RetrievalQA chain.
-
-    Justification for chain_type=stuff:
-    - Chunks are 600 characters each, k=4 chunks retrieved
-    - Total context fits in phi3 context window
-    - Faster than map_reduce for small document sets
+    Create a simple local RAG chain that returns source documents.
     """
     if prompt is None:
         prompt = create_rag_prompt()
 
-    return RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        chain_type_kwargs={"prompt": prompt},
-        return_source_documents=True
-    )
+    return SimpleRAGChain(llm=llm, retriever=retriever, prompt=prompt)
 
 
 def generate_response(
     qa_chain,
     query: str,
-    return_sources: bool = True
+    return_sources: bool = True,
 ) -> Dict:
     """
-    Generate a response and include source citations.
+    Generate a response using the RAG chain.
 
-    Modification from scaffold:
-    - Added source document formatting for clear citation
-    - Students can see which document answered their question
+    Returns a dictionary with an answer and, when requested, compact source data.
     """
+    if not query.strip():
+        raise ValueError("Query cannot be empty.")
+
     result = qa_chain.invoke({"query": query})
+    response = {"answer": result.get("result", "").strip()}
 
-    response = {"answer": result["result"]}
-
-    if return_sources and "source_documents" in result:
+    if return_sources:
+        source_documents = result.get("source_documents", [])
         response["sources"] = [
             {
-                "content": doc.page_content[:200] + "...",
-                "metadata": doc.metadata
+                "content": doc.page_content[:300].strip(),
+                "metadata": doc.metadata,
             }
-            for doc in result["source_documents"]
+            for doc in source_documents
         ]
 
     return response
 
 
+def _format_documents(documents) -> str:
+    """Format retrieved documents into a compact context block."""
+    if not documents:
+        return "No relevant context was retrieved."
+
+    formatted_docs = []
+    for index, doc in enumerate(documents, 1):
+        metadata = doc.metadata or {}
+        source = metadata.get("file_name") or metadata.get("source") or "Unknown source"
+        page = metadata.get("page")
+        source_label = f"{source}, page {page}" if page is not None else source
+        formatted_docs.append(f"[Source {index}: {source_label}]\n{doc.page_content}")
+
+    return "\n\n".join(formatted_docs)
+
+
 if __name__ == "__main__":
     prompt = create_rag_prompt()
-    print("Custom prompt template created successfully")
+    print("Default prompt template:")
     print(prompt.template)

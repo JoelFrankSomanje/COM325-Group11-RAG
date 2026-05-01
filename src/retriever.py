@@ -1,152 +1,199 @@
 """
 Retriever Module
 ================
-Students must implement and customize retrieval strategies.
+Chroma-based retrieval strategies for the Ollama RAG pipeline.
 """
 
-from typing import List, Optional, Dict
-from langchain_community.vectorstores import Chroma, FAISS
-from langchain.schema import Document
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import LLMChainExtractor
-from langchain.retrievers.self_query.base import SelfQueryRetriever
-from langchain.chains.query_constructor.base import AttributeInfo
-from langchain_community.retrievers import BM25Retriever
-from langchain.openai import ChatOpenAI
+from __future__ import annotations
+
+import re
+from typing import Dict, List, Optional, Tuple
+
+try:
+    from langchain_core.documents import Document
+except ImportError:
+    from langchain.schema import Document
+
+from langchain_community.vectorstores import Chroma
+
+
+_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
+
 
 def create_vectorstore(
     documents: List[Document],
     embedder,
-    db_type: str = "chroma",
-    persist_dir: Optional[str] = None
-):
+    persist_dir: Optional[str] = None,
+) -> Chroma:
     """
-    Create a vector store from documents.
-
-    Students MUST modify:
-    - Choose between ChromaDB, FAISS, or other vector DBs
-    - Add metadata filtering fields
+    Create a Chroma vector store from documents using Ollama embeddings.
     """
-    if db_type == "chroma":
-        vectorstore = Chroma.from_documents(
-            documents=documents,
-            embedding=embedder,
-            persist_directory=persist_dir
-        )
-    elif db_type == "faiss":
-        vectorstore = FAISS.from_documents(
-            documents=documents,
-            embedding=embedder
-        )
-        if persist_dir:
-            vectorstore.save_local(persist_dir)
-    else:
-        raise ValueError(f"Unknown DB type: {db_type}")
+    if not documents:
+        raise ValueError("No documents were provided to index.")
 
-    return vectorstore
+    return Chroma.from_documents(
+        documents=documents,
+        embedding=embedder,
+        persist_directory=persist_dir,
+    )
+
+
+def load_vectorstore(embedder, persist_dir: str) -> Chroma:
+    """Load an existing Chroma vector store from disk."""
+    return Chroma(
+        persist_directory=persist_dir,
+        embedding_function=embedder,
+    )
 
 
 def get_retriever(
-    vectorstore,
+    vectorstore: Chroma,
     search_type: str = "similarity",
     k: int = 4,
     score_threshold: Optional[float] = None,
-    filter_criteria: Optional[Dict] = None
+    filter_criteria: Optional[Dict] = None,
 ):
     """
-   enhanced retriever
+    Create a retriever with configurable Chroma search parameters.
     """
+    if k < 1:
+        raise ValueError("k must be at least 1.")
+
     search_kwargs = {"k": k}
 
-    #optional tuning
     if score_threshold is not None:
+        search_type = "similarity_score_threshold"
         search_kwargs["score_threshold"] = score_threshold
 
     if filter_criteria is not None:
         search_kwargs["filter"] = filter_criteria
 
-    if search_type == "mmr":
-        search_kwargs["fetch_k"] = 20
-        search_kwargs["lambda_mult"] = 0.5
-
-
-        if search_type == "similarity_score_threshold":
-            if score_threshold is None:
-                search_kwargs["score_threshold"] = 0.7 # the de
-
-    retriever = vectorstore.as_retriever(
+    return vectorstore.as_retriever(
         search_type=search_type,
-        search_kwargs=search_kwargs
+        search_kwargs=search_kwargs,
     )
-
-    return retriever
 
 
 def retrieve_with_hybrid_search(
-    vectorstore,
+    vectorstore: Chroma,
     query: str,
     k: int = 4,
-    alpha: float = 0.5
+    alpha: float = 0.7,
 ) -> List[Document]:
-   
-   #the vector retriver
-   vector_retriever = vectorstore.as_retriever(search_kwargs={"k": k})
-   vectore_docs = vector_retriever.invoke(query)
+    """
+    Retrieve documents with a lightweight hybrid search.
 
+    The score combines Chroma vector relevance with a local lexical-overlap score.
+    alpha controls the vector contribution; 1.0 is pure vector search and 0.0 is
+    pure lexical matching.
+    """
+    if not 0 <= alpha <= 1:
+        raise ValueError("alpha must be between 0 and 1.")
+    if not query.strip():
+        raise ValueError("Query cannot be empty.")
 
-#the BM25 retriever which is keyword based
-   bm25_retriever = BM25Retriever.from_documents(vectorstore.similarity_search("", k=100))
-   bm25_retriever.k = k
-   bm25_docs = bm25_retriever.invoke(query)
+    vector_hits = vectorstore.similarity_search_with_relevance_scores(query, k=max(k * 4, k))
+    vector_scores = {_document_key(doc): score for doc, score in vector_hits}
 
-   combined = vectore_docs + bm25_docs
+    candidates = _get_all_documents(vectorstore)
+    if not candidates:
+        return []
 
-   seen = set()
-   unique_docs = []
-   for doc in combined:
-       if doc.page_content not in seen:
-           seen.add(doc.page_content)
-           unique_docs.append(doc)
+    lexical_scores = {
+        _document_key(doc): _lexical_overlap_score(query, doc.page_content)
+        for doc in candidates
+    }
 
-   return unique_docs[:k]   
+    candidate_map = {_document_key(doc): doc for doc in candidates}
+    for doc, _score in vector_hits:
+        candidate_map.setdefault(_document_key(doc), doc)
 
+    ranked: List[Tuple[float, Document]] = []
+    for key, doc in candidate_map.items():
+        vector_score = vector_scores.get(key, 0.0)
+        lexical_score = lexical_scores.get(key, 0.0)
+        combined_score = (alpha * vector_score) + ((1 - alpha) * lexical_score)
+        ranked.append((combined_score, doc))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [doc for _score, doc in ranked[:k]]
 
 
 def retrieve_with_reranking(
     retriever,
     query: str,
-    k: int = 4
+    k: int = 4,
 ) -> List[Document]:
-    llm = ChatOpenAI(temperature=0)
-    compressor = LLMChainExtractor.from_llm(llm)
+    """
+    Retrieve extra candidates and rerank them by lexical relevance.
 
-    compression_retriever = ContextualCompressionRetriever(
-        base_retriever=retriever,
-        base_compressor=compressor
+    This keeps the project local and dependency-light while still improving the
+    order for queries where exact terms matter.
+    """
+    if not query.strip():
+        raise ValueError("Query cannot be empty.")
+
+    docs = retriever.invoke(query)
+    ranked = sorted(
+        docs,
+        key=lambda doc: _lexical_overlap_score(query, doc.page_content),
+        reverse=True,
     )
-
-    results = compression_retriever.invoke(query)
-
-    return results[:k]
+    return ranked[:k]
 
 
+def _get_all_documents(vectorstore: Chroma) -> List[Document]:
+    """Read stored documents back from Chroma for local lexical scoring."""
+    data = vectorstore.get(include=["documents", "metadatas"])
+    texts = data.get("documents", []) or []
+    metadatas = data.get("metadatas", []) or []
+
+    return [
+        Document(page_content=text, metadata=metadata or {})
+        for text, metadata in zip(texts, metadatas)
+        if text
+    ]
+
+
+def _lexical_overlap_score(query: str, text: str) -> float:
+    query_terms = set(_tokenize(query))
+    if not query_terms:
+        return 0.0
+
+    text_terms = set(_tokenize(text))
+    if not text_terms:
+        return 0.0
+
+    return len(query_terms & text_terms) / len(query_terms)
+
+
+def _tokenize(text: str) -> List[str]:
+    return [match.group(0).lower() for match in _TOKEN_PATTERN.finditer(text)]
+
+
+def _document_key(document: Document) -> Tuple[str, str, int]:
+    metadata = document.metadata or {}
+    return (
+        str(metadata.get("source", "")),
+        str(metadata.get("page", "")),
+        int(metadata.get("chunk_id", -1)),
+    )
 
 
 if __name__ == "__main__":
-    # Basic test
-    from embedder import get_embedder
-    from loader import load_documents, chunk_documents
+    try:
+        from .embedder import get_embedder
+        from .loader import chunk_documents, load_documents
+    except ImportError:
+        from embedder import get_embedder
+        from loader import chunk_documents, load_documents
 
     docs = load_documents()
     chunks = chunk_documents(docs)
     embedder = get_embedder()
 
     vectorstore = create_vectorstore(chunks, embedder)
-    filter_criteria = {"source": "HandBook"}
-    retriever = get_retriever(vectorstore, 
-                              search_type="similarity",
-                              k=5,
-                              filter_criteria=filter_criteria)
+    retriever = get_retriever(vectorstore, k=3)
 
     results = retriever.invoke("What is RAG?")
     print(f"Retrieved {len(results)} documents")

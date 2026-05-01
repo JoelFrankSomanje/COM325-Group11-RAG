@@ -11,7 +11,8 @@ from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import LLMChainExtractor
 from langchain.retrievers.self_query.base import SelfQueryRetriever
 from langchain.chains.query_constructor.base import AttributeInfo
-
+from langchain.retrievers import BM25Retriever
+from langchain.chat_models import ChatOpenAI
 
 def create_vectorstore(
     documents: List[Document],
@@ -53,21 +54,25 @@ def get_retriever(
     filter_criteria: Optional[Dict] = None
 ):
     """
-    Create a retriever with customizable search parameters.
-
-    Students MUST modify:
-    - Adjust k (number of results)
-    - Try different search types (similarity, mmr, similarity_threshold)
-    - Add metadata filters
-    - Implement hybrid search (BM25 + vector)
+   enhanced retriever
     """
     search_kwargs = {"k": k}
 
+    #optional tuning
     if score_threshold is not None:
         search_kwargs["score_threshold"] = score_threshold
 
     if filter_criteria is not None:
         search_kwargs["filter"] = filter_criteria
+
+    if search_type == "mmr":
+        search_kwargs["fetch_k"] = 20
+        search_kwargs["lambda_mult"] = 0.5
+
+
+        if search_type == "similarity_score_threshold":
+            if score_threshold is None:
+                search_kwargs["score_threshold"] = 0.7 # the de
 
     retriever = vectorstore.as_retriever(
         search_type=search_type,
@@ -83,12 +88,28 @@ def retrieve_with_hybrid_search(
     k: int = 4,
     alpha: float = 0.5
 ) -> List[Document]:
-    """
-    TODO: Implement hybrid search combining BM25 and vector similarity.
+   
+   #the vector retriver
+   vector_retriever = vectorstore.as_retreiver(search_kwargs={"k": k})
+   vectore_docs = vector_retriever.invoke(query)
 
-    Students should implement this for better recall.
-    """
-    raise NotImplementedError("Hybrid search not yet implemented")
+
+#the BM25 retriever which is keyword based
+   bm25_retriever = BM25Retriever.from_documents(vectorstore.similarity_search("", k=100))
+   bm25_retriever.k = k
+   bm25_docs = bm25_retriever.invoke(query)
+
+   combined = vectore_docs + bm25_docs
+
+   seen = set()
+   unique_docs = []
+   for doc in combined:
+       if doc.page_content not in seen:
+           seen.add(doc.page_content)
+           unique_docs.append(doc)
+
+   return unique_docs[:k]   
+
 
 
 def retrieve_with_reranking(
@@ -96,13 +117,19 @@ def retrieve_with_reranking(
     query: str,
     k: int = 4
 ) -> List[Document]:
-    """
-    TODO: Implement reranking for improved relevance.
+    llm = ChatOpenAI(temperature=0)
+    compressor = LLMChainExtractor.from_llm(llm)
 
-    Students can use LangChain's contextual compression or
-    integrate a cross-encoder reranker.
-    """
-    raise NotImplementedError("Reranking not yet implemented")
+    compression_retriever = ContextualCompressionRetriever(
+        base_retriever=retriever,
+        base_compressor=compressor
+    )
+
+    results = compression_retriever.invoke(query)
+
+    return results[:k]
+
+
 
 
 if __name__ == "__main__":
@@ -115,7 +142,11 @@ if __name__ == "__main__":
     embedder = get_embedder()
 
     vectorstore = create_vectorstore(chunks, embedder)
-    retriever = get_retriever(vectorstore, k=3)
+    filter_criteria = {"source": "HandBook"}
+    retriever = get_retriever(vectorstore, 
+                              search_type="similarity",
+                              k=5,
+                              filter_criteria=filter_criteria)
 
     results = retriever.invoke("What is RAG?")
     print(f"Retrieved {len(results)} documents")
